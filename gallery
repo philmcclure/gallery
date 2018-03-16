@@ -1,0 +1,231 @@
+#!/bin/bash
+
+# This will generate an html gallery of all jpg/gif/png's 
+# in the current working directory. This will also use
+# ffmpeg to generate thumbnails for HTML5-compliant
+# video and add those to your gallery as well.
+
+images_per_page="$1"
+FFMPEG="/usr/bin/ffmpeg"
+VIDEO_OPTIONS="preload controls" 
+                 # available options are: 
+                 # 'controls' 
+				 # 'preload' 
+				 # 'autoplay' 
+				 # seperate w/spaces.
+
+#################################################
+#                                               #
+# === DO NOT TOUCH ANYTHING BELOW THIS LINE === #
+#                                               #
+#################################################
+
+# display a progress bar to let the user know the program isn't hung
+progress_bar()
+{
+percentage=`echo "${1}/${imagetotal}*100" | bc -l | cut -d. -f1`
+echo "$percentage" | dialog --gauge "Please wait..." 10 70 0
+}
+
+# function to generate HTML5 video embeds
+video_embed() {
+if [ ! -f .already_processed ];then
+:> .already_processed
+fi
+if [ ! -f ${FFMPEG} ]; then
+		echo "ffmpeg isn't installed!"
+		return
+else
+	wvideo="$1"
+	extension=`echo "$wvideo" | sed 's/\./\n/g' | tail -n1`
+	bname=`echo "$wvideo" | sed "s/\.${extension}//"`
+	check_processed=`grep "${bname}" .already_processed | wc -l`
+	if [ "$check_processed" -gt 0 ]; then
+			return
+	else
+			echo "$wvideo" >> .already_processed
+	fi
+	wvideo_jpg="thumbs/${bname}.jpg"
+	gen_thumbnail "$wvideo" "$wvideo_jpg"
+	
+	mp4_present=0
+	webm_present=0
+	ogv_present=0
+
+	echo "<video poster='thumbs/${bname}.jpg' class='fit' $VIDEO_OPTIONS>" >> "${pages}.html"
+	if [ -f "${bname}.mp4" ]; then
+		echo "<source src='${bname}.mp4'  type='video/mp4'>" >> "${pages}.html"
+		mp4_present=1
+	fi
+	if [ -f "${bname}.webm" ]; then
+		echo "<source src='${bname}.webm' type='video/webm'>" >> "${pages}.html"
+		webm_present=1
+	fi
+	if [ -f "${bname}.ogv" ]; then
+		echo "<source src='${bname}.ogv'  type='video/ogg'>" >> "${pages}.html"
+		ogv_present=1
+	fi
+	echo "<img src='${wvideo_jpg}' alt='It appears your browser does not support HTML5 video.'><br>" >> "${pages}.html"
+	if [ $mp4_present -eq 1 ]; then
+		echo "<a href='${bname}.mp4'>Mp4 Format</a><br>" >> "${pages}.html"
+	fi
+	if [ $webm_present -eq 1 ]; then
+		echo "<a href='${bname}.webm'>Webm Format</a><br>" >> "${pages}.html"
+	fi
+	if [ $ogv_present -eq 1 ]; then
+		echo "<a href='${bname}.ogv'>OGV Format</a>" >> "${pages}.html"
+	fi
+	echo "</video>" >> "${pages}.html"
+	imageadd=$((imageadd+1))
+	return
+	echo "$bname"
+fi
+}
+
+# Generate thumbnail
+gen_thumbnail() {
+video="$1"
+thumb="$2"
+if [ ! -d thumbs ]; then
+	mkdir thumbs
+fi
+$FFMPEG -itsoffset -120 -i "$video" -y  -vcodec mjpeg -vframes 1 -an -f rawvideo "$thumb" 2>/dev/null
+}
+
+# If number isn't passed as script input, exit
+
+if [ -z $images_per_page ]; then
+  echo "Usage: `basename $0` <number of images per gallery page>";
+  exit;
+fi
+
+# Get media counts and total
+jpgcount=`ls *jp{g,eg} 2>/dev/null | wc -l`
+gifcount=`ls *gif 2>/dev/null | wc -l`
+pngcount=`ls *png 2>/dev/null | wc -l`
+vidcount=`ls *ogv *webm *mp4 2>/dev/null | sed 's/\.ogv//' | sed 's/\.webm//' | sed 's/\.mp4//' | sort -u | wc -l`
+imagetotal=$(( jpgcount + gifcount + pngcount + vidcount ))
+
+# Determine number of pages required for gallery
+if [ "$imagetotal" -gt "$images_per_page" ]; then
+	wholepages=`echo "$imagetotal/$images_per_page" | bc -l | cut -d. -f1`
+	if [ -z $wholepages ]; then
+		wholepages="0"
+	fi
+	check_remainder=$((imagetotal%images_per_page))
+	if [ "$check_remainder" -gt 0 ]; then
+		pagetotal=$((wholepages+1))
+	else
+		pagetotal=$wholepages
+	fi
+elif [ "$imagetotal" -gt 0 ]; then
+		pagetotal=1
+		check_remainder=$((imagetotal%images_per_page))
+else
+	echo "There are no images or videos in ${PWD}."
+	exit
+fi
+
+#DEBUGGING
+#echo "image total    : $imagetotal"
+#echo "images per page: $images_per_page"
+#echo "whole pages    : $wholepages"
+#echo "remainder      : $check_remainder"
+#echo "total pages    : $pagetotal"
+
+# outerloop to generate pages
+genpages()
+{
+image_count=1
+for pages in `jot $pagetotal`; do
+
+# I feel like a noob 'cause I can't get "here docs" to work right
+echo -e "<html>\n<head>\n<title>Gallery - Page ${pages}/${pagetotal}</title>\n" > "${pages}.html"
+echo -e "<link rel='stylesheet' href='style.css' type='text/css' media='all' />\n</head>\n<body>\n<div id='container'>" >> "${pages}.html"
+
+	# add $images_per_page
+	imageadd=1
+	if [ "$pages" -eq "$pagetotal" ]; then
+		if [ "$check_remainder" -gt 0 ]; then
+			images_per_page="$check_remainder"
+		fi
+	fi	
+	while [ "$imageadd" -le "$images_per_page" ]; do
+   		next_image=`ls -c *jp{g,eg} *gif *png *webm *ogv *mp4 2>/dev/null | head -n${image_count} | tail -n1`
+		extension=`file "$next_image" | cut -d: -f2 | awk '{ print $1 }'`
+		case "$extension" in
+		JPEG | GIF | PNG ) echo "<a href=\"$next_image\" class='borderless'><img src=\"$next_image\" class='fit' /></a>" >> "${pages}.html" && imageadd=$((imageadd+1));;
+		* ) video_embed "${next_image}";;
+		esac
+		
+		percentage=`echo "${image_count}/${imagetotal}*100" | bc -l | cut -d. -f1`
+		echo "$percentage"
+		
+		image_count=$((image_count+1))
+	done
+
+	# add footer navigation
+	if [ "$pagetotal" -gt 1 ]; then
+		echo "<div id='navigation'>" >> "${pages}.html"
+		if [ "$pages" -gt 1 ]; then
+			echo "<a href='1.html'><<</a>" >> "${pages}.html"
+			previous=$((pages-1))
+			echo "<a href='${previous}.html'>prev</a>" >> "${pages}.html"
+		fi
+		for links in `jot $pagetotal`;do
+			if [ "$links" -eq "$pages" ]; then
+				echo "<b>$links</b>" >> "${pages}.html"
+			else
+				echo "<a href='${links}.html'>${links}</a>" >> "${pages}.html"
+			fi
+		done
+		if [ "$pages" -lt "$pagetotal" ]; then
+			nextpage=$((pages+1))
+			echo "<a href='${nextpage}.html'>next</a>" >> "${pages}.html"
+			echo "<a href='${pagetotal}.html'>>></a>" >> "${pages}.html"
+		fi
+	fi
+		echo -e "</div>\n</div>\n</body>\n</html>" >> "${pages}.html"
+done
+}
+
+genpages | dialog --gauge "Processing ${next_image}..." 10 70 0
+cat > style.css <<STYLESHEET
+body {
+	background-color: #000;
+	color: #fff;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+#container {
+	width: 90%;
+	margin: 0 auto 1em auto;
+	text-align: center;
+}
+
+.fit {
+	width: 43%;
+	height: auto;
+	vertical-align: top;
+	margin: 0;
+	padding: .4em;
+	border: 2px solid #000;
+}
+
+img:hover {
+	border: 2px solid #fff;
+}
+
+.borderless {
+	border: 0;
+}
+
+#navigation {
+	text-align: center;
+	margin: 0 auto 0 auto;
+}
+STYLESHEET
+
+rm .already_processed 2>/dev/null
